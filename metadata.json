@@ -1,0 +1,7 @@
+{
+  "name": "VibeFix",
+  "description": "An AI-powered bug reporting tool that analyzes screen recordings and code to generate instant fixes using Gemini.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
