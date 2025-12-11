@@ -81,12 +81,55 @@ You must also engage in a refinement loop if the user provides feedback.
 Return ONLY a JSON object matching the schema provided.
 `;
 
-export const analyzeBug = async (videoFile: File | null, codeContext: string, history: ChatEntry[]): Promise<BugReport> => {
-  // Support both variable names for flexibility
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+// Retry helper with exponential backoff
+async function generateWithRetry(
+  ai: GoogleGenAI, 
+  model: string, 
+  contents: any, 
+  config: any, 
+  retries = 3
+): Promise<any> {
+  let lastError;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await ai.models.generateContent({
+        model,
+        contents,
+        config
+      });
+    } catch (error: any) {
+      lastError = error;
+      const msg = error.message || '';
+      // Check for quota (429) or server errors (5xx)
+      // We also check for the specific quota string to be safe
+      const isQuota = msg.includes('429') || msg.toLowerCase().includes('quota');
+      const isServer = msg.includes('503') || msg.includes('500');
+
+      if ((isQuota || isServer) && i < retries - 1) {
+        // Exponential backoff: 1s, 2s, 4s... + jitter
+        const delay = Math.pow(2, i) * 1000 + Math.random() * 500;
+        console.warn(`Attempt ${i + 1} for ${model} failed with ${isQuota ? 'Quota' : 'Server'} error. Retrying in ${Math.round(delay)}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      // If it's not a retryable error or last attempt, throw
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
+export const analyzeBug = async (
+  videoFile: File | null, 
+  codeContext: string, 
+  history: ChatEntry[],
+  modelName: string
+): Promise<BugReport> => {
+  // Exclusively use process.env.API_KEY as per guidelines
+  const apiKey = process.env.API_KEY;
   
   if (!apiKey) {
-    throw new Error("API Key is missing. Please check your .env file.");
+    throw new Error("API Key is missing. Please ensure process.env.API_KEY is correctly configured.");
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -94,8 +137,12 @@ export const analyzeBug = async (videoFile: File | null, codeContext: string, hi
   const parts: (Part | { text: string })[] = [];
 
   if (videoFile) {
-    const videoPart = await fileToGenerativePart(videoFile);
-    parts.push(videoPart);
+    try {
+      const videoPart = await fileToGenerativePart(videoFile);
+      parts.push(videoPart);
+    } catch (e: any) {
+      throw new Error(`Failed to process video file: ${e.message}`);
+    }
   }
 
   let promptText = `
@@ -127,27 +174,66 @@ export const analyzeBug = async (videoFile: File | null, codeContext: string, hi
   }
 
   parts.push({ text: promptText });
+  
+  const contents = { parts };
+  const config = {
+    systemInstruction: SYSTEM_INSTRUCTION,
+    responseMimeType: 'application/json',
+    responseSchema: RESPONSE_SCHEMA
+  };
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: {
-        parts: parts
-      },
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: 'application/json',
-        responseSchema: RESPONSE_SCHEMA
+    let response;
+    
+    try {
+      // Primary attempt with selected model
+      response = await generateWithRetry(ai, modelName, contents, config);
+    } catch (primaryError: any) {
+      const msg = primaryError.message || '';
+      // Fallback Logic: If Gemini 3 Pro fails with Quota Exceeded (429), try Gemini 2.5 Flash
+      // Note: 2.5 Flash often has a separate or higher quota limit.
+      if (modelName === 'gemini-3-pro-preview' && (msg.includes('429') || msg.toLowerCase().includes('quota'))) {
+         console.warn("Gemini 3 Pro quota exceeded. Automatically falling back to Gemini 2.5 Flash.");
+         try {
+           response = await generateWithRetry(ai, 'gemini-2.5-flash', contents, config);
+         } catch (fallbackError) {
+           // If fallback also fails, throw the original error to avoid confusion, 
+           // or throw fallback error. Usually original error is more relevant to user's choice.
+           throw primaryError;
+         }
+      } else {
+        throw primaryError;
       }
-    });
+    }
 
-    const resultText = response.text;
-    if (!resultText) throw new Error("No response from Gemini.");
+    let resultText = response.text;
+    if (!resultText) throw new Error("Received empty response from Gemini.");
+
+    // Clean up potential Markdown code block wrappers which can cause JSON.parse to fail
+    if (resultText.trim().startsWith('```')) {
+      resultText = resultText.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+    }
 
     return JSON.parse(resultText) as BugReport;
     
-  } catch (error) {
-    console.error("Gemini API Error:", error);
-    throw new Error("Failed to analyze bug. Please check your API key and try again.");
+  } catch (error: any) {
+    console.error("Gemini API Error Details:", error);
+    
+    // Provide more specific error messages to help debugging
+    let errorMessage = error.message || "Unknown error";
+    
+    if (errorMessage.includes("404")) {
+      errorMessage += ` (Model '${modelName}' not found. Your API key might not have access to this model.)`;
+    } else if (errorMessage.includes("400")) {
+      errorMessage += " (Bad Request. Check if the video format is supported or if the input is too large.)";
+    } else if (errorMessage.includes("403")) {
+      errorMessage += " (Permission Denied. Check your API Key.)";
+    } else if (errorMessage.includes("429") || errorMessage.toLowerCase().includes("quota")) {
+      errorMessage += " (Quota Exceeded. Please try again later or switch to Gemini 2.5 Flash.)";
+    } else if (error instanceof SyntaxError) {
+      errorMessage = "Failed to parse JSON response from model. " + errorMessage;
+    }
+
+    throw new Error(errorMessage);
   }
 };
