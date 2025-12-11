@@ -12,6 +12,7 @@ interface AnalysisResultProps {
 const AnalysisResult: React.FC<AnalysisResultProps> = ({ history, latestReport, onRefine, isRefining, onReset }) => {
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const codeRef = useRef<HTMLElement>(null);
 
   // Shipping Simulation State
   const [shippingStatus, setShippingStatus] = useState<'idle' | 'shipping' | 'shipped'>('idle');
@@ -24,6 +25,16 @@ const AnalysisResult: React.FC<AnalysisResultProps> = ({ history, latestReport, 
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [history, isRefining, extraMessages]);
+
+  // Trigger syntax highlighting when code changes or view switches
+  useEffect(() => {
+    if (codeRef.current && (window as any).Prism) {
+       // Small timeout to ensure DOM is ready and ref is attached
+       setTimeout(() => {
+         (window as any).Prism.highlightElement(codeRef.current);
+       }, 0);
+    }
+  }, [latestReport, shippingStatus]);
 
   const triggerShippingSequence = () => {
     setShippingStatus('shipping');
@@ -73,6 +84,21 @@ const AnalysisResult: React.FC<AnalysisResultProps> = ({ history, latestReport, 
 
     onRefine(input);
     setInput('');
+  };
+
+  // Determine language class for Prism
+  const getLanguageClass = (filename: string) => {
+     if (!filename) return 'language-css';
+     const ext = filename.split('.').pop()?.toLowerCase();
+     switch(ext) {
+         case 'css': return 'language-css';
+         case 'js': return 'language-javascript';
+         case 'jsx': return 'language-jsx';
+         case 'ts': 
+         case 'tsx': return 'language-tsx';
+         case 'html': return 'language-markup';
+         default: return 'language-css';
+     }
   };
 
   // Merge history with local extra messages for display
@@ -197,7 +223,7 @@ const AnalysisResult: React.FC<AnalysisResultProps> = ({ history, latestReport, 
                
                <div className="relative flex-1 overflow-auto">
                  <pre className="p-6 text-sm font-mono leading-relaxed">
-                   <code className="language-css text-gray-300">
+                   <code ref={codeRef} className={`${getLanguageClass(latestReport.file_to_edit)} outline-none`}>
                      {latestReport.code_patch}
                    </code>
                  </pre>

@@ -1,12 +1,21 @@
-import { GoogleGenAI, Type, Schema, Content } from "@google/genai";
+import { GoogleGenAI, Type, Schema, Content, Part } from "@google/genai";
 import { BugReport, ChatEntry } from "../types";
 
 // Helper to convert File to Base64
-const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } }> => {
+const fileToGenerativePart = async (file: File): Promise<Part> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
-      const base64String = (reader.result as string).split(',')[1];
+      const result = reader.result as string;
+      
+      if (!result) {
+        reject(new Error("Failed to read file"));
+        return;
+      }
+
+      // Ensure we get just the base64 part
+      const base64String = result.includes(',') ? result.split(',')[1] : result;
+      
       resolve({
         inlineData: {
           data: base64String,
@@ -14,7 +23,7 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
         },
       });
     };
-    reader.onerror = reject;
+    reader.onerror = (error) => reject(new Error("File reading failed: " + error));
     reader.readAsDataURL(file);
   });
 };
@@ -84,44 +93,44 @@ export const analyzeBug = async (
     const ai = new GoogleGenAI({ apiKey });
     const model = "gemini-2.5-flash";
 
-    // 1. Prepare the initial context (Video + Code)
-    // We always include the video and initial code prompt as the first message context
+    // 1. Prepare the video part
     const videoPart = await fileToGenerativePart(videoFile);
     
-    const initialPrompt = `
-    Here is the relevant code snippet for the application shown in the video:
-    \`\`\`
-    ${codeContext}
-    \`\`\`
-    Analyze the video and the code to find the bug.
-    `;
+    // 2. Prepare the initial prompt part
+    const initialPromptPart: Part = { 
+      text: `
+      Here is the relevant code snippet for the application shown in the video:
+      \`\`\`
+      ${codeContext}
+      \`\`\`
+      Analyze the video and the code to find the bug.
+      ` 
+    };
 
-    // 2. Build the Content array for the chat
+    // 3. Build the Content array for the chat
     const contents: Content[] = [];
 
     // Add the "Root" user message (Video + Code)
+    // We explicitly structure this to ensure the SDK serializes it correctly
     contents.push({
       role: 'user',
-      parts: [
-        videoPart, // Correctly passing the Part object
-        { text: initialPrompt }
-      ]
+      parts: [videoPart, initialPromptPart]
     });
 
-    // 3. Append History
+    // 4. Append History
     // We skip the first user message in history because we just reconstructed it above with the video file.
-    // This assumes history[0] is always the initial request.
-    // If history is empty, we just send the root message.
     if (history.length > 0) {
-      // Append subsequent exchanges
-      // We expect history to alternate: Model (BugReport JSON) -> User (Text) -> Model ...
       for (let i = 1; i < history.length; i++) {
         const entry = history[i];
         if (entry.role === 'model') {
            // The model's history is the JSON string of the report
+           const contentStr = typeof entry.content === 'string' 
+             ? entry.content 
+             : JSON.stringify(entry.content);
+             
            contents.push({
              role: 'model',
-             parts: [{ text: JSON.stringify(entry.content) }]
+             parts: [{ text: contentStr }]
            });
         } else {
            contents.push({
@@ -132,7 +141,7 @@ export const analyzeBug = async (
       }
     }
 
-    // 4. Generate Content
+    // 5. Generate Content
     const response = await ai.models.generateContent({
       model: model,
       contents: contents,
