@@ -97,6 +97,7 @@ const AnalysisResult: React.FC<AnalysisResultProps> = ({ history, latestReport, 
          case 'ts': 
          case 'tsx': return 'language-tsx';
          case 'html': return 'language-markup';
+         case 'json': return 'language-json';
          default: return 'language-css';
      }
   };
@@ -223,7 +224,11 @@ const AnalysisResult: React.FC<AnalysisResultProps> = ({ history, latestReport, 
                
                <div className="relative flex-1 overflow-auto">
                  <pre className="p-6 text-sm font-mono leading-relaxed">
-                   <code ref={codeRef} className={`${getLanguageClass(latestReport.file_to_edit)} outline-none`}>
+                   <code 
+                      key={latestReport.code_patch}
+                      ref={codeRef} 
+                      className={`${getLanguageClass(latestReport.file_to_edit)} outline-none`}
+                   >
                      {latestReport.code_patch}
                    </code>
                  </pre>

@@ -18,8 +18,8 @@ const App: React.FC = () => {
   });
 
   const handleAnalyze = async () => {
-    if (!videoFile || !codeContext.trim()) {
-      alert("Please provide both a video and code snippet.");
+    if (!codeContext.trim()) {
+      alert("Please provide the code snippet.");
       return;
     }
 
@@ -29,7 +29,7 @@ const App: React.FC = () => {
     try {
       // Initial Chat Entry: User Request
       const initialHistory: ChatEntry[] = [
-        { role: 'user', content: 'Analyze this bug.', timestamp: Date.now() }
+        { role: 'user', content: videoFile ? 'Analyze this bug with the attached video.' : 'Analyze this code.', timestamp: Date.now() }
       ];
 
       const report = await analyzeBug(videoFile, codeContext, []);
@@ -59,7 +59,8 @@ const App: React.FC = () => {
   };
 
   const handleRefine = async (feedback: string) => {
-    if (!videoFile || !state.latestReport) return;
+    // If we have a report, we can refine. Video is optional.
+    if (!state.latestReport) return;
 
     // Add user message to history optimistically
     const currentHistory = [...state.history, { role: 'user', content: feedback, timestamp: Date.now() } as ChatEntry];
@@ -157,14 +158,14 @@ const App: React.FC = () => {
                 <div className="absolute bottom-6 right-6 left-6 z-10">
                   <button
                     onClick={handleAnalyze}
-                    disabled={!videoFile || !codeContext.trim()}
+                    disabled={!codeContext.trim()}
                     className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg transition-all duration-300 transform hover:scale-[1.02] active:scale-[0.98]
-                      ${(!videoFile || !codeContext.trim()) 
+                      ${(!codeContext.trim()) 
                         ? 'bg-vibe-muted/20 text-vibe-muted cursor-not-allowed' 
                         : 'bg-gradient-to-r from-vibe-accent to-purple-600 text-white hover:shadow-vibe-accent/25'
                       }`}
                   >
-                    Analyze Vibe
+                    {videoFile ? 'Analyze Vibe' : 'Analyze Code'}
                   </button>
                 </div>
               </div>
@@ -186,7 +187,10 @@ const App: React.FC = () => {
             <div className="text-center space-y-2">
               <h2 className="text-3xl font-bold text-white">VibeFix is thinking...</h2>
               <p className="text-vibe-muted max-w-md mx-auto">
-                Correlating pixel data with source code structure to identify the root cause of the visual regression.
+                {videoFile 
+                  ? "Correlating pixel data with source code structure to identify the root cause."
+                  : "Scanning code patterns and logic to identify potential bugs."
+                }
               </p>
             </div>
           </div>

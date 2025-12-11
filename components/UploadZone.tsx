@@ -81,7 +81,7 @@ const UploadZone: React.FC<UploadZoneProps> = ({ onFileSelect, selectedFile }) =
               </svg>
             </div>
             <div>
-              <p className="font-semibold text-lg text-white">Upload Screen Recording</p>
+              <p className="font-semibold text-lg text-white">Upload Screen Recording (Optional)</p>
               <p className="text-sm text-vibe-muted">Drag & drop or click to browse</p>
             </div>
             <div className="text-xs text-vibe-muted/70 max-w-xs">

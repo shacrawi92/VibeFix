@@ -35,3 +35,9 @@ The AI is prompted with a strict system instruction to act as a "Senior Full-Sta
 ## 🛠️ Tech Stack
 *   **Frontend:** React, Tailwind CSS
 *   **AI:** Google Gemini API (Multimodal Video + Text)
+
+## 🔑 Setup
+
+1.  Open the `.env` file in the project root.
+2.  Replace `YOUR_GEMINI_API_KEY_HERE` with your actual API Key from [Google AI Studio](https://aistudio.google.com/).
+3.  Save the file.

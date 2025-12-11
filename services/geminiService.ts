@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type, Schema, Content, Part } from "@google/genai";
+import { GoogleGenAI, Type, Schema, Part } from "@google/genai";
 import { BugReport, ChatEntry } from "../types";
 
 // Helper to convert File to Base64
@@ -60,112 +60,94 @@ const SYSTEM_INSTRUCTION = `
 You are VibeFix, a Senior Full-Stack Engineer and UI/UX Specialist. You possess the ability to perceive code, visual bugs, and user frustration simultaneously.
 
 # Task
-Your goal is to analyze a screen recording of a software bug, cross-reference it with the provided source code, and generate a specific fix. 
+Your goal is to analyze a software bug. You may receive a screen recording, source code, or both.
+1. If a video is provided: Analyze the visual glitch or functional error and cross-reference it with the code.
+2. If only code is provided: Analyze the code for logic errors, styling mistakes, or common pitfalls.
+
 You must also engage in a refinement loop if the user provides feedback.
 
 # Inputs Provided
-1. **Video:** A screen recording showing the visual glitch or functional error.
+1. **Video:** (Optional) A screen recording showing the visual glitch.
 2. **Codebase:** A subset of the project's source code.
 3. **Chat History:** Previous context of the fix and user feedback.
 
 # Reasoning Steps (Internal Monologue)
-1. **Visual Analysis:** Identify the specific UI element causing the issue in the video.
-2. **Audio/Intent Correlation:** Understand what the user wants (either from the video or their text feedback).
+1. **Analysis:** Identify the issue. If video exists, use it to pinpoint the UI element. If not, scan code for obvious defects.
+2. **Audio/Intent Correlation:** (If video exists) Understand what the user wants.
 3. **Code Triangulation:** Locate the file and line number.
-4. **Refinement:** If the user gives feedback (e.g., "Make it red"), update the previous fix to match their preference while maintaining correctness.
-5. **Solution Generation:** Write the corrected code block.
+4. **Refinement:** If the user gives feedback, adjust the code patch accordingly.
 
-# Tone
-Professional, empathetic, and slightly "hacker-cool". Use emojis occasionally.
+# Output Format
+Return ONLY a JSON object matching the schema provided.
 `;
 
-export const analyzeBug = async (
-  videoFile: File,
-  codeContext: string,
-  history: ChatEntry[] = []
-): Promise<BugReport> => {
-  try {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-      throw new Error("API Key is missing. Please check your environment configuration.");
-    }
+export const analyzeBug = async (videoFile: File | null, codeContext: string, history: ChatEntry[]): Promise<BugReport> => {
+  // Support both variable names for flexibility
+  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  
+  if (!apiKey) {
+    throw new Error("API Key is missing. Please check your .env file.");
+  }
 
-    const ai = new GoogleGenAI({ apiKey });
-    const model = "gemini-2.5-flash";
+  const ai = new GoogleGenAI({ apiKey });
+  
+  const parts: (Part | { text: string })[] = [];
 
-    // 1. Prepare the video part
+  if (videoFile) {
     const videoPart = await fileToGenerativePart(videoFile);
-    
-    // 2. Prepare the initial prompt part
-    const initialPromptPart: Part = { 
-      text: `
-      Here is the relevant code snippet for the application shown in the video:
-      \`\`\`
-      ${codeContext}
-      \`\`\`
-      Analyze the video and the code to find the bug.
-      ` 
-    };
+    parts.push(videoPart);
+  }
 
-    // 3. Build the Content array for the chat
-    const contents: Content[] = [];
+  let promptText = `
+  Here is the relevant source code:
+  \`\`\`
+  ${codeContext}
+  \`\`\`
+  `;
 
-    // Add the "Root" user message (Video + Code)
-    // We explicitly structure this to ensure the SDK serializes it correctly
-    contents.push({
-      role: 'user',
-      parts: [videoPart, initialPromptPart]
-    });
+  if (!videoFile) {
+    promptText += "\nNo video was provided. Please analyze this code for bugs, logic errors, or styling issues.";
+  } else {
+    promptText += "\nPlease analyze the attached video and this code to find the bug and provide a fix.";
+  }
 
-    // 4. Append History
-    // We skip the first user message in history because we just reconstructed it above with the video file.
-    if (history.length > 0) {
-      for (let i = 1; i < history.length; i++) {
-        const entry = history[i];
-        if (entry.role === 'model') {
-           // The model's history is the JSON string of the report
-           const contentStr = typeof entry.content === 'string' 
-             ? entry.content 
-             : JSON.stringify(entry.content);
-             
-           contents.push({
-             role: 'model',
-             parts: [{ text: contentStr }]
-           });
-        } else {
-           contents.push({
-             role: 'user',
-             parts: [{ text: entry.content as string }]
-           });
-        }
+  // Incorporate history for refinement context
+  if (history.length > 0) {
+    promptText += "\n\n--- Conversation History ---\n";
+    history.forEach(entry => {
+      // Avoid sending the base64 video again in text history, just the text content
+      if (entry.role === 'user' && typeof entry.content === 'string') {
+        promptText += `User: ${entry.content}\n`;
+      } else if (entry.role === 'model') {
+        const contentStr = typeof entry.content === 'string' ? entry.content : JSON.stringify(entry.content);
+        promptText += `VibeFix: ${contentStr}\n`;
       }
-    }
+    });
+    promptText += "\n\nUser's Latest Feedback: Please refine the fix based on the above history.";
+  }
 
-    // 5. Generate Content
+  parts.push({ text: promptText });
+
+  try {
     const response = await ai.models.generateContent({
-      model: model,
-      contents: contents,
+      model: 'gemini-2.5-flash',
+      contents: {
+        parts: parts
+      },
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: "application/json",
-        responseSchema: RESPONSE_SCHEMA,
-        temperature: 0.2,
-      },
+        responseMimeType: 'application/json',
+        responseSchema: RESPONSE_SCHEMA
+      }
     });
 
-    let responseText = response.text;
-    if (!responseText) {
-        throw new Error("No response received from Gemini.");
-    }
+    const resultText = response.text;
+    if (!resultText) throw new Error("No response from Gemini.");
 
-    // Clean potential markdown code blocks if the model includes them despite JSON mode
-    responseText = responseText.replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
-
-    const bugReport: BugReport = JSON.parse(responseText);
-    return bugReport;
-
+    return JSON.parse(resultText) as BugReport;
+    
   } catch (error) {
-    console.error("Error analyzing bug:", error);
-    throw error;
+    console.error("Gemini API Error:", error);
+    throw new Error("Failed to analyze bug. Please check your API key and try again.");
   }
 };
